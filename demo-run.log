@@ -1,0 +1,21 @@
+Agent: 0x4c8353114a458EAF3E8fde1Ea2e98c3eCb6d2838
+AgentPay: 0x4f7eb8e04b26213acfb02b19b4334f64f13b73e7
+Payee: 0x4c8353114a458EAF3E8fde1Ea2e98c3eCb6d2838
+tUSD8 balance: 4.5
+
+[1] Approving + depositing 1.0 tUSD8...
+    deposit tx: https://explorer-test.qday.info/tx/0x7a8b51e323c13538e9d252790974ee7f8de2e9b5957c47f32c2069e2c2335038
+
+[2] Creating allowance: cap 1 tUSD8, expiry +1 day...
+    createAllowance tx: https://explorer-test.qday.info/tx/0x44670704da2d763a50adbd6cd3ffe65daafa889fc13221822a17d865384d49f9
+    allowance id: 1
+
+[3a] Agent pays 0.5 tUSD8 (within cap)...
+    pay tx: https://explorer-test.qday.info/tx/0x3f681844390d0576f7f43b8ecd3bb442550a9e9be4a75881890212a63dbb5849
+    remaining: 0.5 tUSD8
+
+[3b] Agent tries to pay 0.6 tUSD8 (over remaining cap) — expect revert...
+    Reverted as designed: execution reverted (unknown custom error)
+    remaining: 0.5 tUSD8
+
+Done. Verify every step on the explorer links above.
