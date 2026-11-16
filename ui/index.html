@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentPay — AI agent spending allowances in tUSD8</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #111; }
+  h1 { font-size: 1.6rem; } h2 { font-size: 1.15rem; margin-top: 2rem; }
+  .card { border: 1px solid #ddd; border-radius: 12px; padding: 1rem; margin: 0.75rem 0; }
+  .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+  input { padding: 0.45rem; border: 1px solid #ccc; border-radius: 8px; flex: 1; min-width: 140px; }
+  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+  button:disabled { background: #94a3b8; cursor: default; }
+  button.danger { background: #dc2626; }
+  .muted { color: #555; font-size: 0.9rem; }
+  .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; }
+  .ok { color: #15803d; } .err { color: #b91c1c; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  td, th { border-bottom: 1px solid #eee; padding: 0.4rem 0.2rem; text-align: left; }
+  #status { min-height: 1.2em; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/ethers@6/dist/ethers.umd.min.js"></script>
+<script src="./abi.js"></script>
+</head>
+<body>
+<h1>AgentPay 🤖💵</h1>
+<p class="muted">AI agents pay in <b>tUSD8</b> — inside a cap, before expiry, revocable anytime.
+Built for Aevum Builder Challenge #1 on QDay Aevum Testnet (chain 44005).</p>
+
+<div class="card">
+  <div class="row">
+    <button id="connectBtn">Connect wallet</button>
+    <span id="account" class="mono"></span>
+  </div>
+  <p id="status" class="muted"></p>
+  <p>AgentPay contract: <span class="mono" id="contractAddr">—</span></p>
+  <p>tQDAY: <b id="gasBal">—</b> &nbsp; tUSD8: <b id="tokenBal">—</b> &nbsp; Vault: <b id="vaultBal">—</b></p>
+</div>
+
+<div class="card">
+  <h2>1 · Deposit tUSD8 into your vault</h2>
+  <div class="row">
+    <input id="depositAmt" type="number" min="0" step="0.000001" placeholder="Amount (tUSD8)" />
+    <button id="depositBtn">Deposit</button>
+    <button id="withdrawBtn">Withdraw</button>
+  </div>
+  <p class="muted">Deposit needs one ERC-20 approval first — the button handles both steps.</p>
+</div>
+
+<div class="card">
+  <h2>2 · Grant an agent an allowance</h2>
+  <div class="row">
+    <input id="agentAddr" placeholder="Agent address (0x…)" />
+    <input id="capAmt" type="number" min="0" step="0.000001" placeholder="Cap (tUSD8)" />
+    <input id="expiryDays" type="number" min="1" value="7" placeholder="Expiry (days)" />
+    <button id="allowBtn">Create allowance</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>3 · Your allowances</h2>
+  <button id="refreshBtn">Refresh</button>
+  <table><thead><tr><th>ID</th><th>Agent</th><th>Cap</th><th>Spent</th><th>Left</th><th>Expiry</th><th></th></tr></thead>
+  <tbody id="allowRows"><tr><td colspan="7" class="muted">Connect a wallet to load allowances.</td></tr></tbody></table>
+</div>
+
+<div class="card">
+  <h2>4 · Pay as the agent (manual)</h2>
+  <p class="muted">Normally the agent script pays. Here you can pay manually if the connected wallet <i>is</i> the allowance's agent.</p>
+  <div class="row">
+    <input id="payId" type="number" min="0" placeholder="Allowance ID" />
+    <input id="payTo" placeholder="Payee (0x…)" />
+    <input id="payAmt" type="number" min="0" step="0.000001" placeholder="Amount (tUSD8)" />
+    <input id="payMemo" placeholder="Memo" />
+    <button id="payBtn">Pay</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Receipts</h2>
+  <table><thead><tr><th>Allowance</th><th>Agent</th><th>Payee</th><th>Amount</th><th>Memo</th><th>Tx</th></tr></thead>
+  <tbody id="receiptRows"><tr><td colspan="6" class="muted">No payments yet.</td></tr></tbody></table>
+</div>
+
+<script>
+const RPC = "https://rpc-test.qday.info";
+const EXPLORER = "https://explorer-test.qday.info";
+const CHAIN_ID = 44005;
+const TUSD8 = "0x456569838f1d43009A91ebA4263147Afd7233483";
+// Deployed on Aevum Testnet (44005), verified on the explorer.
+// Override with ?contract=0x… if needed.
+const AGENTPAY = new URLSearchParams(location.search).get("contract") || "0x4f7eb8e04b26213acfb02b19b4334f64f13b73e7";
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+];
+const $ = (id) => document.getElementById(id);
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+const txLink = (h) => `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener">${short(h)}</a>`;
+const setStatus = (msg, cls) => { const el = $("status"); el.textContent = msg; el.className = cls || "muted"; };
+
+let provider, signer, account, agentPay, tusd8;
+
+async function ensureNetwork() {
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) !== CHAIN_ID) {
+    try {
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xABE5" }] });
+    } catch (e) {
+      if (e.code === 4902) {
+        await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
+          chainId: "0xABE5", chainName: "QDay Aevum", nativeCurrency: { name: "QDAY", symbol: "tQDAY", decimals: 18 },
+          rpcUrls: [RPC], blockExplorerUrls: [EXPLORER],
+        }]});
+      } else throw e;
+    }
+    provider = new ethers.BrowserProvider(window.ethereum);
+  }
+}
+
+async function connect() {
+  if (!window.ethereum) { setStatus("MetaMask not found.", "err"); return; }
+  if (!AGENTPAY) { setStatus("Set the contract address: open this page with ?contract=0x… (see README).", "err"); return; }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    await ensureNetwork();
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+    agentPay = new ethers.Contract(AGENTPAY, window.AGENTPAY_ABI, signer);
+    tusd8 = new ethers.Contract(TUSD8, ERC20_ABI, signer);
+    $("account").textContent = account;
+    $("contractAddr").textContent = AGENTPAY;
+    setStatus("Connected on QDay Aevum.", "ok");
+    await refreshAll();
+  } catch (e) { setStatus("Connect failed: " + (e.shortMessage || e.message), "err"); }
+}
+
+async function refreshAll() {
+  try {
+    $("gasBal").textContent = Number(ethers.formatEther(await provider.getBalance(account))).toFixed(4);
+    $("tokenBal").textContent = Number(ethers.formatUnits(await tusd8.balanceOf(account), 6)).toFixed(2);
+    $("vaultBal").textContent = Number(ethers.formatUnits(await agentPay.vaultBalance(account), 6)).toFixed(2);
+    await refreshAllowances();
+    await refreshReceipts();
+  } catch (e) { setStatus("Refresh failed: " + (e.shortMessage || e.message), "err"); }
+}
+
+async function refreshAllowances() {
+  const n = Number(await agentPay.nextAllowanceId());
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const a = await agentPay.allowances(i);
+    if (a.owner.toLowerCase() !== account.toLowerCase()) continue;
+    const left = await agentPay.allowanceRemaining(i);
+    const exp = new Date(Number(a.expiry) * 1000).toLocaleString();
+    const state = a.revoked ? "revoked" : (Date.now() / 1000 >= Number(a.expiry) ? "expired" : "active");
+    rows.push(`<tr><td>${i}</td><td class="mono">${short(a.agent)}</td>
+      <td>${ethers.formatUnits(a.cap, 6)}</td><td>${ethers.formatUnits(a.spent, 6)}</td>
+      <td>${ethers.formatUnits(left, 6)}</td><td>${exp} (${state})</td>
+      <td>${state === "active" ? `<button class="danger" data-revoke="${i}">Revoke</button>` : ""}</td></tr>`);
+  }
+  $("allowRows").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="7" class="muted">No allowances yet.</td></tr>`;
+  document.querySelectorAll("[data-revoke]").forEach(b => b.onclick = async () => {
+    try { setStatus("Revoking…"); const tx = await agentPay.revokeAllowance(b.dataset.revoke); await tx.wait(); setStatus("Revoked. " + tx.hash, "ok"); await refreshAll(); }
+    catch (e) { setStatus("Revoke failed: " + (e.shortMessage || e.message), "err"); }
+  });
+}
+
+async function refreshReceipts() {
+  const events = await agentPay.queryFilter(agentPay.filters.PaymentMade, -10000);
+  const rows = events.slice(-10).reverse().map(ev => `<tr><td>${ev.args.id}</td>
+    <td class="mono">${short(ev.args.agent)}</td><td class="mono">${short(ev.args.payee)}</td>
+    <td>${ethers.formatUnits(ev.args.amount, 6)}</td><td>${ev.args.memo || ""}</td>
+    <td>${txLink(ev.transactionHash)}</td></tr>`);
+  $("receiptRows").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="6" class="muted">No payments yet.</td></tr>`;
+}
+
+$("connectBtn").onclick = connect;
+$("refreshBtn").onclick = refreshAll;
+$("depositBtn").onclick = async () => {
+  try {
+    const amt = ethers.parseUnits($("depositAmt").value || "0", 6);
+    if (amt === 0n) throw new Error("Enter an amount.");
+    setStatus("Approving tUSD8…");
+    const tx1 = await tusd8.approve(AGENTPAY, amt); await tx1.wait();
+    setStatus("Depositing…");
+    const tx2 = await agentPay.deposit(amt); await tx2.wait();
+    setStatus("Deposited. " + tx2.hash, "ok"); await refreshAll();
+  } catch (e) { setStatus("Deposit failed: " + (e.shortMessage || e.message), "err"); }
+};
+$("withdrawBtn").onclick = async () => {
+  try {
+    const amt = ethers.parseUnits($("depositAmt").value || "0", 6);
+    if (amt === 0n) throw new Error("Enter an amount.");
+    setStatus("Withdrawing…");
+    const tx = await agentPay.withdraw(amt); await tx.wait();
+    setStatus("Withdrawn. " + tx.hash, "ok"); await refreshAll();
+  } catch (e) { setStatus("Withdraw failed: " + (e.shortMessage || e.message), "err"); }
+};
+$("allowBtn").onclick = async () => {
+  try {
+    const agent = $("agentAddr").value.trim();
+    const cap = ethers.parseUnits($("capAmt").value || "0", 6);
+    const days = Number($("expiryDays").value || "7");
+    if (!ethers.isAddress(agent)) throw new Error("Invalid agent address.");
+    if (cap === 0n) throw new Error("Enter a cap.");
+    const expiry = Math.floor(Date.now() / 1000) + days * 86400;
+    setStatus("Creating allowance…");
+    const tx = await agentPay.createAllowance(agent, cap, expiry); await tx.wait();
+    setStatus("Allowance created. " + tx.hash, "ok"); await refreshAll();
+  } catch (e) { setStatus("Create allowance failed: " + (e.shortMessage || e.message), "err"); }
+};
+$("payBtn").onclick = async () => {
+  try {
+    const id = Number($("payId").value);
+    const to = $("payTo").value.trim();
+    const amt = ethers.parseUnits($("payAmt").value || "0", 6);
+    const memo = $("payMemo").value || "";
+    if (!ethers.isAddress(to)) throw new Error("Invalid payee address.");
+    if (amt === 0n) throw new Error("Enter an amount.");
+    setStatus("Paying…");
+    const tx = await agentPay.pay(id, to, amt, memo); await tx.wait();
+    setStatus("Paid. " + tx.hash, "ok"); await refreshAll();
+  } catch (e) { setStatus("Pay failed: " + (e.shortMessage || e.message), "err"); }
+};
+if (AGENTPAY) $("contractAddr").textContent = AGENTPAY;
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"dependencies":{"ethers":"^6.13.0"},"description":"AgentPay — AI agent spending allowances in tUSD8 on QDay Aevum Testnet","name":"agentpay","private":true,"scripts":{"agent":"node agent/run-agent.js"},"version":"1.0.0"}
